@@ -1,0 +1,220 @@
+Below is the practical way to think about Si5351A-B-GT output frequency calculation.
+
+The Si5351 frequency path is:
+
+25 MHz / 27 MHz crystal
+        ↓
+PLL feedback multiplier
+        ↓
+VCO frequency, usually 600–900 MHz
+        ↓
+Output MultiSynth divider
+        ↓
+R divider
+        ↓
+CLKx output
+
+The datasheet describes this as two synthesis stages plus an output-stage R divider: the PLL first generates a high-frequency intermediate clock, then the MultiSynth fractional divider generates the desired output, and the R divider can extend the output down to low kHz frequencies. AN619 gives the same model and states the PLL VCO range is 600–900 MHz, output MultiSynths generate about 500 kHz–200 MHz, and the R divider is used for outputs down to kHz range.
+
+1. Main equations
+
+For Si5351A using a crystal:
+
+fVCO = fXTAL × PLL_Multiplier
+
+where:
+
+PLL_Multiplier = a + b/c
+
+Then the output is:
+
+fOUT = fVCO / (MultiSynth × R)
+
+or rearranged:
+
+MultiSynth = fVCO / (fOUT × R)
+
+AN619 gives these exact relationships for VCO and output frequency.
+
+For the fractional divider register encoding, both PLL feedback MultiSynth and output MultiSynth use:
+
+P1 = 128 × a + floor(128 × b / c) - 512
+P2 = 128 × b - c × floor(128 × b / c)
+P3 = c
+
+AN619 gives these equations for the PLL feedback divider and the output MultiSynth divider.
+
+2. Example: generate 113 kHz on CLK0
+
+Assume:
+
+Crystal = 25 MHz
+Output required = 113 kHz
+Use PLLA
+Use CLK0
+
+Choose a convenient PLL frequency:
+
+fVCO = 900 MHz
+
+This is valid because it is inside the 600–900 MHz PLL range.
+
+So PLLA multiplier is:
+
+900 MHz / 25 MHz = 36
+
+So:
+
+PLLA ratio = 36 + 0/1
+a = 36
+b = 0
+c = 1
+
+PLL register parameters:
+
+P1 = 128 × 36 - 512 = 4096
+P2 = 0
+P3 = 1
+
+So for PLLA MSNA registers 26–33:
+
+MSNA_P1 = 4096
+MSNA_P2 = 0
+MSNA_P3 = 1
+
+AN619 shows that registers 26–33 are the PLLA feedback MultiSynth MSNA parameter registers.
+
+3. Choose R divider and output MultiSynth
+
+Because 113 kHz is below 500 kHz, use the R divider. AN619 says the R divider can be set to 1, 2, 4, 8 ... 128 for low-frequency outputs.
+
+Choose:
+
+R = 8
+
+Then:
+
+MultiSynth0 = 900 MHz / (113 kHz × 8)
+            = 900,000,000 / 904,000
+            = 995.5752212389
+
+Convert to fraction:
+
+995.5752212389 = 995 + 65/113
+
+So:
+
+a = 995
+b = 65
+c = 113
+
+Now calculate the output MultiSynth parameters:
+
+floor(128 × b / c)
+= floor(128 × 65 / 113)
+= floor(8320 / 113)
+= 73
+
+Then:
+
+P1 = 128 × 995 + 73 - 512
+   = 126921
+
+P2 = 128 × 65 - 113 × 73
+   = 8320 - 8249
+   = 71
+
+P3 = 113
+
+So for MultiSynth0 / CLK0:
+
+MS0_P1 = 126921
+MS0_P2 = 71
+MS0_P3 = 113
+R0_DIV = divide by 8
+
+AN619 shows MS0 registers 42–49 contain MS0_P3, R0_DIV, MS0_P1, and MS0_P2. It also shows R0_DIV = 011b means divide by 8.
+
+4. Register bytes for this example
+PLLA registers 26–33
+
+For:
+
+MSNA_P1 = 4096
+MSNA_P2 = 0
+MSNA_P3 = 1
+
+Registers:
+
+Reg 26 = 0x00
+Reg 27 = 0x01
+Reg 28 = 0x00
+Reg 29 = 0x10
+Reg 30 = 0x00
+Reg 31 = 0x00
+Reg 32 = 0x00
+Reg 33 = 0x00
+CLK0 MultiSynth registers 42–49
+
+For:
+
+MS0_P1 = 126921 = 0x1EFC9
+MS0_P2 = 71     = 0x00047
+MS0_P3 = 113    = 0x00071
+R0_DIV = divide by 8 = 011b
+
+Registers:
+
+Reg 42 = 0x00
+Reg 43 = 0x71
+Reg 44 = 0x31
+Reg 45 = 0xEF
+Reg 46 = 0xC9
+Reg 47 = 0x00
+Reg 48 = 0x00
+Reg 49 = 0x47
+
+Why Reg 44 = 0x31?
+
+R0_DIV = 011b → bits [6:4] = 0x30
+MS0_DIVBY4 = 00
+MS0_P1[17:16] = 01b because P1 = 126921 needs bit16 set
+
+So Reg44 = 0x30 + 0x01 = 0x31
+5. CLK0 control register
+
+For CLK0, use:
+
+Reg 16 = 0x0C or 0x0F
+
+Meaning:
+
+CLK0 powered up
+MS0 fractional mode
+MS0 source = PLLA
+not inverted
+CLK0 source = MultiSynth0
+drive strength = 2 mA, 4 mA, 6 mA, or 8 mA
+
+For 8 mA drive:
+
+Reg 16 = 0x0F
+
+AN619 says in Register 16, MS0_SRC = 0 selects PLLA, CLK0_SRC = 11b selects MultiSynth0, and CLK0_IDRV = 11b gives 8 mA drive.
+
+6. Frequency check
+fOUT = 900,000,000 / (995 + 65/113) / 8
+
+Since:
+
+995 + 65/113 = 112500 / 113
+
+Then:
+
+fOUT = 900,000,000 / (112500 / 113) / 8
+     = 900,000,000 × 113 / 112500 / 8
+     = 113,000 Hz
+
+So the result is exactly:
+
+113 kHz

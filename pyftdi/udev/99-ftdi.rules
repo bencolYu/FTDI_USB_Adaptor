@@ -1,0 +1,8 @@
+## Udev rule to allow non-root access to FTDI USB devices
+## Install: sudo cp 99-ftdi.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# Match FTDI vendor (0403) and set user-accessible permissions
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", MODE="0666", GROUP="plugdev", TAG+="uaccess"
+
+# Optionally match only specific product IDs (uncomment if desired)
+# SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6001", MODE="0666", GROUP="plugdev", TAG+="uaccess"

@@ -1,0 +1,335 @@
+
+// ADS7253 config requirements
+/*
+
+ADS7253 Configuration Summary
+1. Input mode
+
+Use Pseudo-Differential mode:
+
+CFR.B7 = 1
+
+This matches your analog inputs:
+
+AINP_A: voltage sensing signal, 0–5V
+AINP_B: current sensing signal, 0–5V
+AINM_A / AINM_B: internally connected to VREF = 2.5V
+
+So the ADC is effectively measuring the AC signal around the 2.5V midpoint.
+
+2. Input range
+
+Use the wider input range:
+
+CFR.B9 = 1
+FSR = 2 × VREF
+
+With the internal 2.5V reference:
+
+ADC input range = 0–5V
+Midpoint = 2.5V
+
+This is suitable for your front-end op-amp ADC conditioning output of 0–5V.
+
+3. Reference configuration
+
+Because your actual board has REFIO_A / REFIO_B floating, you must use the internal reference:
+
+CFR.B6 = 1
+Internal reference = 2.5V
+
+For future hardware revision, it is recommended to add decoupling capacitors:
+
+REFIO_A → 1µF → GND
+REFIO_B → 1µF → GND
+
+This helps stabilize the internal reference.
+
+4. SPI output mode
+
+Your schematic uses only one ADC output line, ADC_SDO, and the ADC section is marked as 16-CLK, Single SDO Mode. So you should read both A and B channels from SDO_A only.
+
+Use:
+
+CFR.B11 = 1    // 16-CLK mode
+CFR.B10 = 1    // Single SDO mode, output on SDO_A
+
+For bring-up, do not start with 32MHz SPI clock. Use:
+
+SCLK = 8–16MHz
+5. Final recommended CFR value
+uint16_t cfr = 0x8EC0;
+
+Meaning:
+
+0x8000  Write CFR command
+0x0800  16-CLK mode
+0x0400  Single SDO mode
+0x0200  FSR = 2 × VREF = 5V
+0x0080  Pseudo-Differential, AINM = VREF
+0x0040  Internal reference enabled
+6. Data conversion
+
+The ADC output is 12-bit:
+
+0–4095 corresponds to 0–5V
+Around 2048 corresponds to the 2.5V midpoint
+
+Voltage conversion:
+
+voltage = code * 5.0 / 4095.0;
+ac_value = voltage - 2.5;
+
+So the core configuration is:
+
+Pseudo-Differential
+Internal 2.5V reference
+0–5V input range
+A/B simultaneous sampling
+Single SDO_A output
+16MHz SPI for bring-up
+CFR = 0x8EC0
+*/
+
+
+
+// ads7253_single_sdo.c
+//
+// ADS7253 Linux spidev sample
+// Mode:
+//   - 16-CLK Single-SDO mode
+//   - Read ADC_A and ADC_B from SDO_A only
+//   - Pseudo-differential input
+//   - Internal 2.5V reference
+//   - Input range: 0~5V, FSR = 2 * VREF
+//
+// Build:
+//   gcc ads7253_single_sdo.c -o ads7253_single_sdo
+//
+// Run:
+//   sudo ./ads7253_single_sdo /dev/spidev0.0
+//
+// Notes:
+//   For 16-CLK single-SDO mode, keep SCLK <= about 18 MHz.
+//   Start with 8~16 MHz for bring-up.
+
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/spi/spidev.h>
+
+#define ADS7253_SPI_MODE          SPI_MODE_0
+#define ADS7253_BITS_PER_WORD     8
+#define ADS7253_SPI_SPEED_HZ      16000000
+
+#define ADS7253_VREF              2.5
+#define ADS7253_FULL_SCALE        (2.0 * ADS7253_VREF)   // 5.0V
+#define ADS7253_MID_VOLTAGE       ADS7253_VREF           // 2.5V
+#define ADS7253_MAX_CODE          4095.0                 // 12-bit
+
+static int spi_fd = -1;
+
+static int spi_transfer(uint8_t *tx, uint8_t *rx, size_t len)
+{
+    struct spi_ioc_transfer tr;
+    memset(&tr, 0, sizeof(tr));
+
+    tr.tx_buf = (unsigned long)tx;
+    tr.rx_buf = (unsigned long)rx;
+    tr.len = len;
+    tr.speed_hz = ADS7253_SPI_SPEED_HZ;
+    tr.bits_per_word = ADS7253_BITS_PER_WORD;
+    tr.delay_usecs = 0;
+
+    int ret = ioctl(spi_fd, SPI_IOC_MESSAGE(1), &tr);
+    if (ret < 1) {
+        fprintf(stderr, "SPI transfer failed: %s\n", strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+
+static int spi_init(const char *device)
+{
+    spi_fd = open(device, O_RDWR);
+    if (spi_fd < 0) {
+        fprintf(stderr, "Failed to open %s: %s\n", device, strerror(errno));
+        return -1;
+    }
+
+    uint8_t mode = ADS7253_SPI_MODE;
+    uint8_t bits = ADS7253_BITS_PER_WORD;
+    uint32_t speed = ADS7253_SPI_SPEED_HZ;
+
+    if (ioctl(spi_fd, SPI_IOC_WR_MODE, &mode) < 0) {
+        fprintf(stderr, "Failed to set SPI mode: %s\n", strerror(errno));
+        return -1;
+    }
+
+    if (ioctl(spi_fd, SPI_IOC_WR_BITS_PER_WORD, &bits) < 0) {
+        fprintf(stderr, "Failed to set bits per word: %s\n", strerror(errno));
+        return -1;
+    }
+
+    if (ioctl(spi_fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed) < 0) {
+        fprintf(stderr, "Failed to set SPI speed: %s\n", strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+
+static void spi_close_device(void)
+{
+    if (spi_fd >= 0) {
+        close(spi_fd);
+        spi_fd = -1;
+    }
+}
+
+/*
+    ADS7253 CFR setting:
+
+    CFR.B15:B12 = 1000b  -> Write CFR command
+    CFR.B11     = 1      -> 16-CLK mode
+    CFR.B10     = 1      -> Single-SDO mode, output on SDO_A
+    CFR.B9      = 1      -> FSR = 2 * VREF = 5V
+    CFR.B8      = 0      -> normal mode
+    CFR.B7      = 1      -> pseudo-differential, AINM_x = VREF
+    CFR.B6      = 1      -> internal reference enabled
+    CFR.B5      = 0      -> normal operation
+    CFR.B4      = 0      -> straight binary output
+    CFR.B3:B0   = 0000
+
+    CFR = 0x8EC0
+*/
+static int ads7253_write_cfr(void)
+{
+    uint16_t cfr = 0x8EC0;
+
+    /*
+       In 16-CLK single-SDO mode, a frame uses 32 SCLKs.
+       So send 4 bytes. The first 16 bits contain the CFR command.
+    */
+    uint8_t tx[4] = {
+        (uint8_t)((cfr >> 8) & 0xFF),
+        (uint8_t)(cfr & 0xFF),
+        0x00,
+        0x00
+    };
+
+    uint8_t rx[4] = {0};
+
+    return spi_transfer(tx, rx, sizeof(tx));
+}
+
+/*
+    16-CLK single-SDO ADS7253 output format on SDO_A:
+
+    CS falling edge outputs first 0.
+    Then data is launched on SCLK falling edges.
+
+    For ADS7253, 32-bit frame is effectively:
+
+    bit31  bit30  bit29..bit18   bit17..bit14   bit13  bit12..bit1   bit0
+      0      0      A[11:0]          0000          0      B[11:0]      000
+
+    Practically, after receiving 4 bytes MSB-first:
+      ADC_A = (raw >> 18) & 0x0FFF
+      ADC_B = (raw >> 3)  & 0x0FFF
+*/
+static int ads7253_read_ab(uint16_t *adc_a, uint16_t *adc_b)
+{
+    uint8_t tx[4] = {0x00, 0x00, 0x00, 0x00};
+    uint8_t rx[4] = {0};
+
+    if (spi_transfer(tx, rx, sizeof(tx)) < 0) {
+        return -1;
+    }
+
+    uint32_t raw =
+        ((uint32_t)rx[0] << 24) |
+        ((uint32_t)rx[1] << 16) |
+        ((uint32_t)rx[2] << 8)  |
+        ((uint32_t)rx[3]);
+
+    *adc_a = (raw >> 18) & 0x0FFF;
+    *adc_b = (raw >> 3)  & 0x0FFF;
+
+    return 0;
+}
+
+static double adc_code_to_voltage(uint16_t code)
+{
+    return ((double)code * ADS7253_FULL_SCALE) / ADS7253_MAX_CODE;
+}
+
+int main(int argc, char *argv[])
+{
+    const char *device = "/dev/spidev0.0";
+
+    if (argc >= 2) {
+        device = argv[1];
+    }
+
+    printf("Opening SPI device: %s\n", device);
+
+    if (spi_init(device) < 0) {
+        spi_close_device();
+        return 1;
+    }
+
+    printf("SPI mode: MODE0\n");
+    printf("SPI speed: %d Hz\n", ADS7253_SPI_SPEED_HZ);
+    printf("Configuring ADS7253 CFR = 0x8EC0\n");
+
+    if (ads7253_write_cfr() < 0) {
+        fprintf(stderr, "Failed to write ADS7253 CFR\n");
+        spi_close_device();
+        return 1;
+    }
+
+    /*
+       Datasheet timing normally takes effect after following frames.
+       Do a few dummy reads after CFR write.
+    */
+    usleep(1000);
+
+    for (int i = 0; i < 4; i++) {
+        uint16_t dummy_a, dummy_b;
+        ads7253_read_ab(&dummy_a, &dummy_b);
+    }
+
+    printf("Start reading ADS7253...\n");
+    printf("Format:\n");
+    printf("  code_a, voltage_a, ac_a, code_b, voltage_b, ac_b\n\n");
+
+    while (1) {
+        uint16_t code_a = 0;
+        uint16_t code_b = 0;
+
+        if (ads7253_read_ab(&code_a, &code_b) == 0) {
+            double voltage_a = adc_code_to_voltage(code_a);
+            double voltage_b = adc_code_to_voltage(code_b);
+
+            double ac_a = voltage_a - ADS7253_MID_VOLTAGE;
+            double ac_b = voltage_b - ADS7253_MID_VOLTAGE;
+
+            printf("A: %4u, %.5f V, AC %.5f V | "
+                   "B: %4u, %.5f V, AC %.5f V\n",
+                   code_a, voltage_a, ac_a,
+                   code_b, voltage_b, ac_b);
+        }
+
+        usleep(10000);   // 10 ms, for debug display only
+    }
+
+    spi_close_device();
+    return 0;
+}

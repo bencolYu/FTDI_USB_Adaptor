@@ -4,7 +4,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/pyftdi/bin/set_si5351.py"
 DEFAULT_ADDR="0xC0"
-DEFAULT_URL="ftdi:///1"
+DEFAULT_URL="auto"
 
 if [[ $# -eq 0 ]]; then
     echo "Si5351A Clock Control Convenience Wrapper"
@@ -21,7 +21,7 @@ if [[ $# -eq 0 ]]; then
     echo ""
     echo "Optional Arguments:"
     echo "  --addr 0xXX                   I2C address (default: 0xC0)"
-    echo "  --url ftdi://...              FTDI URL (default: ftdi:///1)"
+    echo "  --url ftdi://...|auto         FTDI URL (default: auto)"
     echo ""
     echo "Examples:"
     echo "  $0 clk0 enable"

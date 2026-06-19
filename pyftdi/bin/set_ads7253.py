@@ -12,6 +12,7 @@ Usage examples:
   python3 pyftdi/bin/set_ads7253.py --read 10
   python3 pyftdi/bin/set_ads7253.py --url ftdi://ftdi:232h/1 --read 5
   python3 pyftdi/bin/set_ads7253.py --freq 16MHz --read 20 --quiet --batch-size 128
+  python3 pyftdi/bin/set_ads7253.py --read 10000 --quiet --batch-size 128 --output ads7253_fast.csv
   python3 pyftdi/bin/set_ads7253.py --check
 """
 import argparse
@@ -274,6 +275,7 @@ Examples:
   
   # Fast CSV capture without printing every sample
   python3 pyftdi/bin/set_ads7253.py --read 1000 --quiet --batch-size 128 --output ads7253.csv
+  python3 pyftdi/bin/set_ads7253.py --read 10000 --quiet --batch-size 128 --output ads7253_fast.csv
   
   # Continuous reading (Ctrl+C to stop)
   python3 pyftdi/bin/set_ads7253.py --read 0

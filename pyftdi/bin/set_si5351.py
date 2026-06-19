@@ -49,6 +49,8 @@ SI5351_PLL_RESET = 0xB1
 SI5351_LOAD_CAP_CTRL = 0xB7
 
 XTAL_FREQ = 25_000_000
+CLK0_FREQ_MIN_HZ = 90_000
+CLK0_FREQ_MAX_HZ = 150_000
 
 R_DIV_VALUES = [1, 2, 4, 8, 16, 32, 64, 128]
 # SI5351A output load capacitance control for register 183 (0xB7)
@@ -243,7 +245,7 @@ def main(argv=None):
     p.add_argument('--addr', default='0xC0', type=parse_int,
                    help='8-bit I2C write address (default: 0xC0)')
     p.add_argument('--freq', default=100000, type=parse_int,
-                   help='Output frequency in Hz (default: 100000)')
+                   help='CLK0 output frequency in Hz, allowed range 90000-150000 (default: 100000)')
     p.add_argument('--load', default=8, type=parse_int,
                    choices=sorted(LOAD_CAP_VALUES.keys()),
                    help='CLK0 load capacitance in pF (6, 8, 10; default: 8)')
@@ -272,6 +274,10 @@ def main(argv=None):
     load_pf = args.load
     if freq_hz <= 0:
         p.error('Frequency must be positive')
+    if not CLK0_FREQ_MIN_HZ <= freq_hz <= CLK0_FREQ_MAX_HZ:
+        p.error(
+            f'CLK0 frequency out of range: {args.freq} Hz. '
+            f'Allowed range is {CLK0_FREQ_MIN_HZ} Hz to {CLK0_FREQ_MAX_HZ} Hz.')
     
     # Handle --show-output shorthand
     if args.show_output:

@@ -51,6 +51,9 @@ from set_si5351 import (
 )
 
 
+MIN_ADC_RETRIES = 3
+
+
 def parse_frequency(value: str) -> int:
     """Parse Hz/KHz/MHz frequency values."""
     text = value.strip().lower()
@@ -244,7 +247,7 @@ If dwell_seconds is provided, the script only tunes CLK0 and does not read ADS72
     parser.add_argument('--settle', type=float, default=0.5,
                         help='Delay after each frequency change before ADC read, seconds (default: 0.5)')
     parser.add_argument('--adc-retries', type=int, default=3,
-                        help='Retry ADC capture if invalid all-FF frames are read (default: 3)')
+                        help='Retry ADC capture on communication errors or invalid all-FF frames (minimum/default: 3)')
     parser.add_argument('--retry-delay', type=float, default=0.5,
                         help='Delay before retrying a failed ADC capture, seconds (default: 0.5)')
     parser.add_argument('--load', type=int, choices=sorted(LOAD_CAP_VALUES.keys()), default=8,
@@ -274,6 +277,11 @@ If dwell_seconds is provided, the script only tunes CLK0 and does not read ADS72
         parser.error('--adc-retries must be zero or positive')
     if args.retry_delay < 0:
         parser.error('--retry-delay must be zero or positive')
+    adc_retries = max(args.adc_retries, MIN_ADC_RETRIES)
+    if args.adc_retries < MIN_ADC_RETRIES:
+        print(
+            f'Using {adc_retries} ADC retries; minimum is {MIN_ADC_RETRIES}',
+            file=sys.stderr)
 
     addr = to_7bit_address(int(args.addr, 0))
     tune_only = args.dwell_seconds is not None
@@ -371,7 +379,7 @@ If dwell_seconds is provided, the script only tunes CLK0 and does not read ADS72
                     args.spi_mode,
                     args.samples,
                     args.batch_size,
-                    args.adc_retries,
+                    adc_retries,
                     args.retry_delay,
                 )
                 ads_for_conversion = ADS7253Controller(None)

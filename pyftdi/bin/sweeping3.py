@@ -2,8 +2,8 @@
 """Sweep Si5351 CLK0 frequency, adjust AD5245, and capture ADS7253 samples.
 
 Example:
-  python3 pyftdi/bin/sweeping2.py 90000 150000 1000 1.0
-  python3 pyftdi/bin/sweeping2.py 90k 150k 1k 1.0 --samples 128
+  python3 pyftdi/bin/sweeping3.py 95000 120000 1000 1.50
+  python3 pyftdi/bin/sweeping3.py 95k 120k 1k 1.50 --samples 128
 """
 import argparse
 import csv
@@ -54,12 +54,11 @@ AD5245_START_VALUE = 1
 AD5245_MAX_VALUE = 190
 AD5245_STEP_VALUE = 10
 AD5245_FINE_STEP_VALUE = 1
-AD5245_FINE_THRESHOLD_V = 0.01
+AD5245_FINE_THRESHOLD_V = 0.03
 AD5245_DEFAULT_ADDR = 0x2C
 AD5245_DEFAULT_CMD = 0x00
-ADC_B_NOISE_REJECT_V = 0.40
 MIN_ADC_RETRIES = 3
-MIN_VALID_SAMPLE_RATIO = 0.50
+MIN_SETTLE_BEFORE_ADC_S = 0.005
 
 
 def parse_frequency(value: str) -> int:
@@ -273,26 +272,14 @@ def calculate_capture(samples, sweep_start: float, total_samples_start: int):
             'ac_b_v': ac_b,
             'raw_hex': ' '.join(f'{byte:02X}' for byte in rx_data),
         })
-        if voltage_b > ADC_B_NOISE_REJECT_V:
-            continue
         voltages_a.append(voltage_a)
         voltages_b.append(voltage_b)
         ac_values_a.append(ac_a)
         ac_values_b.append(ac_b)
-    if not voltages_a:
-        raise IOError(
-            f'all {len(samples)} samples were rejected by voltage_b_v <= '
-            f'{ADC_B_NOISE_REJECT_V:.2f} V filter')
-    min_valid_samples = max(1, math.ceil(len(samples) * MIN_VALID_SAMPLE_RATIO))
-    if len(voltages_a) < min_valid_samples:
-        raise IOError(
-            f'only {len(voltages_a)} of {len(samples)} samples passed '
-            f'voltage_b_v <= {ADC_B_NOISE_REJECT_V:.2f} V filter; '
-            f'minimum is {min_valid_samples}')
     stats = {
         'raw_samples': len(samples),
         'samples': len(voltages_a),
-        'filtered_samples': len(samples) - len(voltages_a),
+        'filtered_samples': 0,
         'mean_a_v': sum(voltages_a) / len(voltages_a),
         'rms_a_v': rms(voltages_a),
         'ac_rms_a_v': rms(ac_values_a),
@@ -324,7 +311,7 @@ def capture_and_calculate(url: str, spi_freq: int, spi_mode: int,
             if attempt > retries:
                 break
             print(
-                f'    ADC filtered capture retry {attempt}/{retries}: {exc}',
+                f'    ADC capture retry {attempt}/{retries}: {exc}',
                 file=sys.stderr)
             if retry_delay:
                 time.sleep(retry_delay)
@@ -337,8 +324,8 @@ def main(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
 Examples:
-  python3 pyftdi/bin/sweeping2.py 90000 150000 1000 1.0
-  python3 pyftdi/bin/sweeping2.py 90k 150k 1k 1.0 --samples 128
+  python3 pyftdi/bin/sweeping3.py 95000 120000 1000 1.50
+  python3 pyftdi/bin/sweeping3.py 95k 120k 1k 1.50 --samples 128
 
 Frequency range is limited to {CLK0_FREQ_MIN_HZ} Hz - {CLK0_FREQ_MAX_HZ} Hz.
 Each frequency captures 128 ADS7253 samples by default.
@@ -347,9 +334,7 @@ ADS7253 channel A RMS reaches piezo_volt_set or AD5245 reaches {AD5245_MAX_VALUE
 AD5245 uses coarse step {AD5245_STEP_VALUE}, then fine step
 {AD5245_FINE_STEP_VALUE} once piezo_volt_set - rms_a_v is below
 {AD5245_FINE_THRESHOLD_V:.2f} V.
-Summary calculations ignore samples where voltage_b_v is above
-{ADC_B_NOISE_REJECT_V:.2f} V; captures are retried unless at least
-{MIN_VALID_SAMPLE_RATIO:.0%} of samples remain valid. Raw accepted samples are saved.
+Summary calculations use all captured samples.
         """,
     )
     parser.add_argument('start_frequency', type=parse_frequency,
@@ -389,17 +374,17 @@ Summary calculations ignore samples where voltage_b_v is above
     parser.add_argument('--batch-size', type=int, default=ADS7253_RECOMMENDED_BATCH_SIZE,
                         help='ADS7253 samples per FTDI USB transaction (default: 128)')
     parser.add_argument('--settle', type=float, default=0.5,
-                        help='Delay after each frequency change before ADC read, seconds (default: 0.5)')
+                        help='Delay after frequency/AD5245 changes before ADC read, seconds (default: 0.5, minimum: 0.005)')
     parser.add_argument('--adc-retries', type=int, default=3,
                         help='Retry ADC capture on communication errors or invalid all-FF frames (minimum/default: 3)')
     parser.add_argument('--retry-delay', type=float, default=0.5,
                         help='Delay before retrying a failed ADC capture, seconds (default: 0.5)')
     parser.add_argument('--load', type=int, choices=sorted(LOAD_CAP_VALUES.keys()), default=8,
                         help='Si5351 crystal load capacitance in pF (default: 8)')
-    parser.add_argument('--output', default='sweep2_samples.csv',
-                        help='Per-sample CSV output file (default: sweep2_samples.csv)')
-    parser.add_argument('--summary-output', default='sweep2_rms.csv',
-                        help='Per-frequency RMS CSV output file (default: sweep2_rms.csv)')
+    parser.add_argument('--output', default='sweep3_samples.csv',
+                        help='Per-sample CSV output file (default: sweep3_samples.csv)')
+    parser.add_argument('--summary-output', default='sweep3_rms.csv',
+                        help='Per-frequency RMS CSV output file (default: sweep3_rms.csv)')
     parser.add_argument('--stop-on-error', action='store_true',
                         help='Stop sweep on the first frequency that fails')
     args = parser.parse_args(argv)
@@ -417,6 +402,12 @@ Summary calculations ignore samples where voltage_b_v is above
         parser.error('--batch-size must be positive')
     if args.settle < 0:
         parser.error('--settle must be zero or positive')
+    settle_delay = max(args.settle, MIN_SETTLE_BEFORE_ADC_S)
+    if args.settle < MIN_SETTLE_BEFORE_ADC_S:
+        print(
+            f'Using {settle_delay:.3f}s settle delay; minimum is '
+            f'{MIN_SETTLE_BEFORE_ADC_S:.3f}s',
+            file=sys.stderr)
     if args.adc_retries < 0:
         parser.error('--adc-retries must be zero or positive')
     if args.retry_delay < 0:
@@ -529,8 +520,8 @@ Summary calculations ignore samples where voltage_b_v is above
             try:
                 print('  Setting Si5351 CLK0...')
                 set_si5351_frequency(i2c_detected.url, addr, freq_hz, args.load)
-                if args.settle:
-                    time.sleep(args.settle)
+                if settle_delay:
+                    time.sleep(settle_delay)
 
                 selected_ad5245 = None
                 selected_ad5245_readback = None
@@ -550,8 +541,8 @@ Summary calculations ignore samples where voltage_b_v is above
                     raise IOError(
                         f'AD5245 reset readback mismatch: wrote '
                         f'{args.ad5245_start}, read {reset_readback}')
-                if args.settle:
-                    time.sleep(args.settle)
+                if settle_delay:
+                    time.sleep(settle_delay)
                 ad5245_value = args.ad5245_start
                 ad5245_step = args.ad5245_step
                 while ad5245_value <= args.ad5245_max:
@@ -567,8 +558,8 @@ Summary calculations ignore samples where voltage_b_v is above
                         raise IOError(
                             f'AD5245 readback mismatch: wrote '
                             f'{ad5245_value}, read {selected_ad5245_readback}')
-                    if args.settle:
-                        time.sleep(args.settle)
+                    if settle_delay:
+                        time.sleep(settle_delay)
 
                     print(f'  Reading {args.samples} ADS7253 samples...')
                     selected_rows, selected_stats = capture_and_calculate(
@@ -584,8 +575,7 @@ Summary calculations ignore samples where voltage_b_v is above
                     )
                     print(
                         f'    rms_a_v={selected_stats["rms_a_v"]:.6f} V '
-                        f'(target {args.piezo_volt_set:.6f} V, '
-                        f'filtered {selected_stats["filtered_samples"]} samples)')
+                        f'(target {args.piezo_volt_set:.6f} V)')
                     if initial_ad5245 is None:
                         initial_ad5245 = ad5245_value
                         initial_ad5245_readback = selected_ad5245_readback

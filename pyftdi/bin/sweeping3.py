@@ -51,6 +51,7 @@ from set_si5351 import (
 
 
 AD5245_START_VALUE = 1
+AD5245_DEFAULT_RESET_VALUE = 128
 AD5245_MAX_VALUE = 190
 AD5245_STEP_VALUE = 10
 AD5245_FINE_STEP_VALUE = 1
@@ -442,6 +443,8 @@ Summary calculations use all captured samples.
     sample_file = None
     summary_file = None
     i2c_url_for_cleanup = None
+    ad5245_cleanup_addr = ad5245_addr
+    ad5245_cleanup_cmd = ad5245_cmd
 
     try:
         i2c_detected = find_i2c_url((
@@ -690,6 +693,22 @@ Summary calculations use all captured samples.
         return 1
     finally:
         if i2c_url_for_cleanup:
+            try:
+                print(f'Resetting AD5245 to {AD5245_DEFAULT_RESET_VALUE}...')
+                set_ad5245_value(
+                    i2c_url_for_cleanup,
+                    ad5245_cleanup_addr,
+                    ad5245_cleanup_cmd,
+                    AD5245_DEFAULT_RESET_VALUE,
+                )
+                readback = read_ad5245_value(
+                    i2c_url_for_cleanup,
+                    ad5245_cleanup_addr,
+                    ad5245_cleanup_cmd,
+                )
+                print(f'AD5245 readback after reset: {readback}')
+            except Exception as exc:
+                print(f'Failed to reset AD5245: {exc}', file=sys.stderr)
             try:
                 print('Disabling Si5351 outputs...')
                 disable_si5351_outputs(i2c_url_for_cleanup, addr)

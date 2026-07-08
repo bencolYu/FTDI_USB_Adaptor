@@ -1,0 +1,1 @@
+batch,timestamp_s,batch_samples,first_sample,last_sample,voltage_a_rms_v,voltage_b_rms_v,ac_a_rms_v,ac_b_rms_v

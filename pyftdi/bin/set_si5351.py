@@ -49,7 +49,7 @@ SI5351_PLL_RESET = 0xB1
 SI5351_LOAD_CAP_CTRL = 0xB7
 
 XTAL_FREQ = 25_000_000
-CLK0_FREQ_MIN_HZ = 90_000
+CLK0_FREQ_MIN_HZ = 70_000
 CLK0_FREQ_MAX_HZ = 150_000
 
 R_DIV_VALUES = [1, 2, 4, 8, 16, 32, 64, 128]
@@ -245,7 +245,7 @@ def main(argv=None):
     p.add_argument('--addr', default='0xC0', type=parse_int,
                    help='8-bit I2C write address (default: 0xC0)')
     p.add_argument('--freq', default=100000, type=parse_int,
-                   help='CLK0 output frequency in Hz, allowed range 90000-150000 (default: 100000)')
+                   help='CLK0 output frequency in Hz, allowed range 70000-150000 (default: 100000)')
     p.add_argument('--load', default=8, type=parse_int,
                    choices=sorted(LOAD_CAP_VALUES.keys()),
                    help='CLK0 load capacitance in pF (6, 8, 10; default: 8)')

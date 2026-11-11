@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Sweep Si5351 CLK0 frequency and capture ADS7253 ADC samples.
-
+    Sweeping without voltage componsation, only for frequency response test.
 Example:
   python3 pyftdi/bin/sweeping.py 90000 150000 1000
   python3 pyftdi/bin/sweeping.py 90k 150k 1k --samples 128

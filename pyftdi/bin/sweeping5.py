@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Sweep Si5351 CLK0 frequency, adjust AD5245, and capture ADS7253 samples.
-    suits for 100V Mosfet driver board
+    suits for 100V Mosfet driver board with Tekcelo mesh nebulizer
 
 Example:
   python3 pyftdi/bin/sweeping5.py 70000 85000 1000 1.50

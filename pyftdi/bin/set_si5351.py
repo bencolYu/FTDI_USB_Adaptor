@@ -23,7 +23,7 @@ Examples:
   python3 pyftdi/bin/set_si5351.py 100000 10ms 50%
 
   # Duty-cycle mode stays active until Ctrl+C is pressed
-  python3 pyftdi/bin/set_si5351.py 100000 100ms 1%  # Ctrl+C to exit the command
+  python3 pyftdi/bin/set_si5351.py 100000 10ms 50%  # Ctrl+C to exit the command
 """
 
 import argparse

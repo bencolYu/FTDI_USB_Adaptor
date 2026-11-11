@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Sweep Si5351 CLK0 frequency, adjust AD5245, and capture ADS7253 samples.
-
+    sweeping with voltage componsation, suits for 60V Mosfet piezo driver board with TPC 104KHz/Vpp70V disc.
 Example:
   python3 pyftdi/bin/sweeping3.py 95000 120000 1000 1.50
   python3 pyftdi/bin/sweeping3.py 95k 120k 1k 1.50 --samples 128

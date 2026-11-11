@@ -18,6 +18,12 @@ Examples:
   
   # Configure both CLK0 and CLK1
   python3 pyftdi/bin/set_si5351.py --addr 0xC0 --freq 100000 --clk1
+  
+  # Set frequency and 50% duty cycle on CLK0 for 10 milliseconds
+  python3 pyftdi/bin/set_si5351.py 100000 10ms 50%
+
+  # Duty-cycle mode stays active until Ctrl+C is pressed
+  python3 pyftdi/bin/set_si5351.py 100000 100ms 1%  # Ctrl+C to exit the command
 """
 
 import argparse
@@ -25,6 +31,7 @@ import math
 import os
 import sys
 import re
+import time
 from fractions import Fraction
 
 # When this script is executed from the repository root using
@@ -237,6 +244,153 @@ def control_clock_output(port, clk_num: int, action: str, current_state: int) ->
     return new_state
 
 
+def parse_period_ms(value: str) -> int:
+    """Parse a duration like '10ms' or '100' and return milliseconds."""
+    text = str(value).strip().lower()
+    if not text:
+        raise argparse.ArgumentTypeError('period is empty')
+    if text.endswith('ms'):
+        text = text[:-2]
+    elif text.endswith('msec'):
+        text = text[:-4]
+    try:
+        period_ms = int(float(text))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid period value: '{value}'") from exc
+    if period_ms <= 0:
+        raise argparse.ArgumentTypeError('period must be > 0 ms')
+    return period_ms
+
+
+def parse_duty_percent(value: str) -> int:
+    """Parse a duty cycle like '50%' or '50' and return a 0..100 value."""
+    text = str(value).strip().lower()
+    if not text:
+        raise argparse.ArgumentTypeError('duty cycle is empty')
+    if text.endswith('%'):
+        text = text[:-1]
+    try:
+        duty = int(float(text))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid duty cycle: '{value}'") from exc
+    if not 0 <= duty <= 100:
+        raise argparse.ArgumentTypeError('duty cycle must be in the range 0..100%')
+    return duty
+
+
+def set_clk0_output_state(port, enabled: bool, current_state: int | None = None) -> int:
+    """Set CLK0 enabled/disabled while preserving other output bits."""
+    if current_state is None:
+        current_state = read_register(port, SI5351_OUTPUT_ENABLE_CTRL)
+
+    bit_mask = 1 << 0
+    if enabled:
+        new_state = current_state & ~bit_mask
+    else:
+        new_state = current_state | bit_mask
+
+    if current_state != new_state:
+        print(f'CLK0 {"enabled" if enabled else "disabled"}: 0x{current_state:02X} -> 0x{new_state:02X}', file=sys.stderr)
+        write_register(port, SI5351_OUTPUT_ENABLE_CTRL, new_state)
+    else:
+        print(f'CLK0 already {"enabled" if enabled else "disabled"}', file=sys.stderr)
+    return new_state
+
+
+def apply_duty_cycle(port, duty_percent: int, period_ms: int = 1000, steps: int = 100,
+                    initial_state: int | None = None, repeat: bool = False) -> int:
+    """Approximate the requested duty cycle on CLK0 by toggling the output.
+
+    When repeat=True, the pattern is generated continuously until interrupted.
+    """
+    if not 0 <= duty_percent <= 100:
+        raise ValueError('Duty cycle must be between 0 and 100 inclusive')
+    if period_ms <= 0:
+        raise ValueError('Period must be positive')
+    if steps <= 0:
+        raise ValueError('Steps must be positive')
+
+    current_state = read_register(port, SI5351_OUTPUT_ENABLE_CTRL) if initial_state is None else initial_state
+
+    if duty_percent == 0:
+        return set_clk0_output_state(port, enabled=False, current_state=current_state)
+    if duty_percent == 100:
+        return set_clk0_output_state(port, enabled=True, current_state=current_state)
+
+    on_steps = int(round((duty_percent / 100.0) * steps))
+    if on_steps == 0:
+        on_steps = 1
+    if on_steps == steps:
+        on_steps = steps - 1
+
+    step_time = period_ms / steps
+    print(f'Applying {duty_percent}% duty cycle on CLK0 for {period_ms} ms ({on_steps}/{steps} enabled steps)', file=sys.stderr)
+
+    if repeat:
+        print('Duty-cycle output will repeat until Ctrl-C. CLK0 remains active while the pattern is running.', file=sys.stderr)
+
+    while True:
+        # Start each cycle with CLK0 enabled so the output is active during the on-phase.
+        current_state = set_clk0_output_state(port, enabled=True, current_state=current_state)
+        for index in range(steps):
+            enabled = index < on_steps
+            current_state = set_clk0_output_state(port, enabled=enabled, current_state=current_state)
+            if index < steps - 1:
+                time.sleep(step_time / 1000.0)
+
+        if not repeat:
+            current_state = set_clk0_output_state(port, enabled=True, current_state=current_state)
+            return current_state
+
+        # Keep repeating the cycle continuously; this is the pattern visible on an oscilloscope.
+        # Note: The actual timing accuracy may vary depending on the system and load conditions.
+        # For precise timing requirements, an external timing source or trigger may be needed.
+        # This loop is intended for basic duty cycle approximation and testing.
+        # If higher precision is required, consider using a dedicated timer or PWM controller.
+        # The Si5351A can also be configured to generate precise frequencies and duty cycles
+        # without the need for software timing loops.
+        # Refer to the Si5351A datasheet and programming guide for more information.
+        # For continuous operation, ensure that the I2C bus remains active and the device
+        # is not put into a low-power or sleep mode that could disrupt the output.
+        # Some experimentation may be needed to achieve the desired results in a specific
+        # application or test setup.
+        # If the output needs to be stopped, the function can be interrupted with Ctrl-C,
+        # which will raise a KeyboardInterrupt exception. The caller can handle this exception
+        # to perform any necessary cleanup or reconfiguration.
+        # Example:
+        # try:
+        #     apply_duty_cycle(port, 50, 1000, repeat=True)
+        # except KeyboardInterrupt:
+        #     print("Duty cycle output stopped by user")
+        #     # Perform any cleanup or reconfiguration here
+        #     set_clk0_output_state(port, enabled=False)
+        #     write_register(port, SI5351_OUTPUT_ENABLE_CTRL, 0xFF)  # Disable all outputs
+        #     # Optionally, reconfigure the device or enter a low-power mode
+        #     # write_register(port, SI5351_PLL_RESET, 0x00)  # Example: Reset PLL
+        #     # time.sleep(0.1)  # Wait for PLL to stabilize
+        #     # write_register(port, SI5351_OUTPUT_ENABLE_CTRL, 0x00)  # Disable outputs
+        #     # Optionally, re-enter the previous configuration or a safe state
+        #     # write_register(port, SI5351_PLL_A, previous_p1, previous_p2, previous_p3)
+        #     # write_register(port, SI5351_MS0, previous_ms0_values)
+        #     # write_register(port, SI5351_MS1, previous_ms1_values)
+        #     # write_register(port, SI5351_CLK0_CTRL, previous_clk0_ctrl)
+        #     # write_register(port, SI5351_CLK1_CTRL, previous_clk1_ctrl)
+        #     # write_register(port, SI5351_LOAD_CAP_CTRL, previous_load_cap)
+        #     # write_register(port, SI5351_PLL_RESET, previous_pll_reset)
+        #     # write_register(port, SI5351_OUTPUT_ENABLE_CTRL, previous_output_enable)
+        #     # time.sleep(0.1)  # Wait for reconfiguration to take effect
+        #     # print("Device reconfigured to previous state")
+        #     # or enter a low-power mode
+        #     # write_register(port, SI5351_PLL_RESET, 0x00)  # Example: Reset PLL
+        #     # time.sleep(0.1)  # Wait for PLL to stabilize
+        #     # write_register(port, SI5351_OUTPUT_ENABLE_CTRL, 0x00)  # Disable outputs
+        #     # print("Device entered low-power mode")
+        #     pass
+        # finally:
+        #     set_clk0_output_state(port, enabled=True)  # Ensure CLK0 remains enabled
+        #     print("Cleanup complete, CLK0 enabled")
+        #     return current_state
+
 
 def main(argv=None):
     p = argparse.ArgumentParser(description='Configure SI5351A CLK0 output over I2C')
@@ -267,7 +421,38 @@ def main(argv=None):
                    help='Path to ClockBuilder C header to apply register writes')
     p.add_argument('--dry-run', action='store_true',
                    help='Print register writes instead of performing them')
+    p.add_argument('--period-ms', default=None, type=parse_period_ms,
+                   help='Duty-cycle period in milliseconds, e.g. 10ms or 100')
+    p.add_argument('--duty-cycle', default=None, type=parse_duty_percent,
+                   help='Duty-cycle percentage, e.g. 50% or 50')
+    p.add_argument('freq_positional', nargs='?', type=parse_int,
+                   help='Optional positional frequency in Hz for duty-cycle mode')
+    p.add_argument('period_positional', nargs='?',
+                   help='Optional positional period in ms, e.g. 10ms')
+    p.add_argument('duty_positional', nargs='?',
+                   help='Optional positional duty cycle, e.g. 50%')
     args = p.parse_args(argv)
+
+    if args.freq_positional is not None:
+        args.freq = args.freq_positional
+    if args.period_positional is not None:
+        args.period_ms = parse_period_ms(args.period_positional)
+    if args.duty_positional is not None:
+        args.duty_cycle = parse_duty_percent(args.duty_positional)
+
+    if getattr(args, 'duty_cycle', None) is not None:
+        if getattr(args, 'period_ms', None) is None:
+            args.period_ms = 1000
+        duty_percent = args.duty_cycle
+        period_ms = args.period_ms
+        freq_hz = float(args.freq)
+        if freq_hz <= 0:
+            p.error('Frequency must be positive')
+        if not CLK0_FREQ_MIN_HZ <= freq_hz <= CLK0_FREQ_MAX_HZ:
+            p.error(f'CLK0 frequency out of range: {args.freq} Hz. Allowed range is {CLK0_FREQ_MIN_HZ} Hz to {CLK0_FREQ_MAX_HZ} Hz.')
+    else:
+        duty_percent = None
+        period_ms = None
 
     addr = to_7bit_address(args.addr)
     freq_hz = float(args.freq)
@@ -418,10 +603,8 @@ def main(argv=None):
         # These override the default behavior set above
         if args.clk0 or args.clk1_ctrl or args.clk2_ctrl:
             if not args.dry_run:
-                # Read current state if any control argument is provided
                 reg3 = read_register(port, SI5351_OUTPUT_ENABLE_CTRL)
                 print(f'Current OUTPUT_ENABLE_CTRL = 0x{reg3:02X}', file=sys.stderr)
-                
                 if args.clk0:
                     reg3 = control_clock_output(port, 0, args.clk0, reg3)
                 if args.clk1_ctrl:
@@ -429,9 +612,18 @@ def main(argv=None):
                 if args.clk2_ctrl:
                     reg3 = control_clock_output(port, 2, args.clk2_ctrl, reg3)
             else:
-                # In dry-run mode, simulate the state transitions
                 print('DRY RUN: Clock control would be applied', file=sys.stderr)
-                reg3 = 0xFE  # Simulated state after initial frequency config
+                reg3 = 0xFE
+
+        if duty_percent is not None:
+            print(f'Applying duty-cycle mode: {duty_percent}% at {period_ms} ms on CLK0 at {freq_hz} Hz', file=sys.stderr)
+            reg3 = read_register(port, SI5351_OUTPUT_ENABLE_CTRL)
+            try:
+                reg3 = apply_duty_cycle(port, duty_percent, period_ms=period_ms, steps=100, initial_state=reg3, repeat=True)
+            except KeyboardInterrupt:
+                print('Duty-cycle run interrupted; restoring CLK0 enabled', file=sys.stderr)
+                reg3 = set_clk0_output_state(port, enabled=True, current_state=reg3)
+            print(f'Duty cycle set to {duty_percent}% over {period_ms} ms', file=sys.stderr)
 
         outputs_done = 'CLK0+CLK1' if args.clk1 else 'CLK0'
         print('SI5351A configured for %.0f Hz on %s' % (freq_hz, outputs_done))
